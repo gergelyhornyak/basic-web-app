@@ -1,0 +1,303 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HUF Market - Probability Engine</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --bg: #0f172a;
+            --card: #1e293b;
+            --primary: #38bdf8;
+            --success: #22c55e;
+            --danger: #ef4444;
+            --text: #f1f5f9;
+            --warning: #fbbf24;
+        }
+
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background: var(--bg); 
+            color: var(--text); 
+            margin: 0; 
+            display: flex; 
+            justify-content: center; 
+            padding: 10px;
+        }
+
+        #game-container { 
+            width: 100%; 
+            max-width: 500px; 
+            background: var(--card); 
+            padding: 20px; 
+            border-radius: 16px; 
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
+
+        .header { text-align: center; margin-bottom: 20px; }
+        
+        .stats-grid { 
+            display: grid; 
+            grid-template-columns: 1fr 1fr 1fr;
+            gap: 8px; 
+            margin-bottom: 20px; 
+        }
+
+        .stat-card {
+            background: rgba(255,255,255,0.03);
+            padding: 10px 5px;
+            border-radius: 8px;
+            text-align: center;
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+
+        .stat-label { font-size: 0.6rem; color: #94a3b8; text-transform: uppercase; }
+        .stat-value { font-size: 0.95rem; font-weight: bold; }
+        .day-value { color: var(--warning); }
+
+        .price-hero { text-align: center; margin-bottom: 10px; }
+        #current-price { font-size: 2.8rem; font-weight: 800; color: var(--text); transition: color 0.3s; }
+        .shock-active { color: var(--danger) !important; animation: pulse 0.8s infinite; }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.6; }
+            100% { opacity: 1; }
+        }
+
+        .chart-container { height: 180px; width: 100%; margin-bottom: 20px; }
+
+        .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+
+        button { 
+            padding: 18px 10px; border: none; border-radius: 12px; 
+            font-weight: bold; cursor: pointer; transition: all 0.2s; color: white;
+        }
+
+        .buy-btn { background: var(--success); box-shadow: 0 4px 0 #16a34a; }
+        .sell-btn { background: var(--primary); box-shadow: 0 4px 0 #0284c7; }
+        button:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 0px 0 transparent; }
+        button:disabled { opacity: 0.2; cursor: not-allowed; filter: grayscale(1); }
+
+        #event-log {
+            margin-top: 20px;
+            font-size: 0.8rem;
+            height: 90px;
+            overflow: hidden;
+            border-top: 1px solid #334155;
+            padding-top: 10px;
+            display: flex;
+            flex-direction: column-reverse;
+        }
+
+        .log-entry { padding: 3px 0; opacity: 1; transition: opacity 1s; }
+        .log-entry.old { opacity: 0.4; }
+        .log-entry.very-old { opacity: 0.1; }
+        .log-entry.shock { color: var(--danger); font-weight: bold; }
+    </style>
+</head>
+<body>
+
+<div id="game-container">
+    <div class="header">
+        <h2 style="margin:0">HUF Market</h2>
+        <small id="market-status" style="color: #64748b">Stable Cycle</small>
+    </div>
+
+    <div class="stats-grid">
+        <div class="stat-card">
+            <div class="stat-label">Day</div>
+            <div class="stat-value day-value" id="day-counter">1</div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">USD</div>
+            <div class="stat-value">$<span id="usd-balance">1,000.00</span></div>
+        </div>
+        <div class="stat-card">
+            <div class="stat-label">HUF</div>
+            <div class="stat-value"><span id="huf-balance">0</span> Ft</div>
+        </div>
+    </div>
+
+    <div class="price-hero">
+        <div class="stat-label">USD/HUF Exchange Rate</div>
+        <div id="current-price">400.00</div>
+    </div>
+
+    <div class="chart-container">
+        <canvas id="marketChart"></canvas>
+    </div>
+
+    <div class="controls">
+        <button class="buy-btn" id="buyBtn" onclick="trade('buy')">BUY HUF</button>
+        <button class="sell-btn" id="sellBtn" onclick="trade('sell')">SELL HUF</button>
+    </div>
+
+    <div id="event-log"></div>
+</div>
+
+<script>
+    /**
+     * @type: Categories for logging
+     * @impact: Total percentage increase in the USD/HUF rate (HUF devaluation)
+     * @duration: Ticks the event lasts
+     * @probability: 0.0 to 1.0 chance to trigger each tick (if no active shock)
+     */
+    const RANDOM_EVENTS = [
+        { name: "Sanctions Imposed", descr:"Sanctions have been imposed on the country.", type: "Political", impact: 0.25, duration: 20, probability: 0.01 },
+        { name: "Aid from the East", descr:"Aid has been provided by a neighboring country.", type: "Global", impact: -0.40, duration: 8, probability: 0.02 },
+        { name: "Emergency Rate Hike Failure", descr:"An emergency rate hike failed to stabilize the economy.", type: "Economic", impact: 0.15, duration: 11, probability: 0.01 },
+        { name: "Opposition Movement", descr:"An opposition movement has emerged.", type: "Political", impact: -0.25, duration: 14, probability: 0.05 },
+        { name: "Government Forum", descr:"A government forum explained everything.", type: "Political", impact: 0.35, duration: 4, probability: 0.1 },
+    ];
+
+    let state = {
+        day: 1,
+        usd: 1000.00,
+        huf: 0,
+        price: 400.00, 
+        history: Array(10).fill(400),
+        labels: Array(10).fill(''),
+        tradeSize: 100, 
+        activeShock: null,
+        shockTimeRemaining: 0
+    };
+
+    // Chart Setup
+    const ctx = document.getElementById('marketChart').getContext('2d');
+    const marketChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: state.labels,
+            datasets: [{
+                data: state.history,
+                borderColor: '#38bdf8',
+                borderWidth: 3,
+                tension: 0.4,
+                pointRadius: 0,
+                fill: true,
+                backgroundColor: 'rgba(56, 189, 248, 0.1)'
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: { duration: 600 },
+            plugins: { legend: { display: false } },
+            scales: {
+                x: { display: false },
+                y: { grid: { color: 'rgba(148, 163, 184, 0.1)' }, ticks: { color: '#64748b' } }
+            }
+        }
+    });
+
+    function updateUI() {
+        document.getElementById('day-counter').innerText = state.day;
+        document.getElementById('usd-balance').innerText = state.usd.toLocaleString(undefined, {minimumFractionDigits: 2});
+        document.getElementById('huf-balance').innerText = Math.floor(state.huf).toLocaleString();
+        document.getElementById('current-price').innerText = state.price.toFixed(2);
+        
+        document.getElementById('buyBtn').disabled = state.usd < state.tradeSize;
+        const hufToGet100 = state.tradeSize * state.price;
+        document.getElementById('sellBtn').disabled = state.huf < hufToGet100;
+
+        const priceEl = document.getElementById('current-price');
+        const statusEl = document.getElementById('market-status');
+
+        if (state.activeShock) {
+            priceEl.classList.add('shock-active');
+            statusEl.innerText = `CRISIS [${state.activeShock.type}]: ${state.activeShock.name}`;
+            statusEl.style.color = 'var(--danger)';
+        } else {
+            priceEl.classList.remove('shock-active');
+            statusEl.innerText = "Status: Natural Inflation";
+            statusEl.style.color = '#64748b';
+        }
+
+        marketChart.update();
+    }
+
+    function trade(type) {
+        if (type === 'buy' && state.usd >= state.tradeSize) {
+            const hufBought = state.tradeSize * state.price;
+            state.usd -= state.tradeSize;
+            state.huf += hufBought;
+            log(`Bought ${Math.floor(hufBought).toLocaleString()} HUF`);
+        } else if (type === 'sell') {
+            const hufNeeded = state.tradeSize * state.price;
+            if (state.huf >= hufNeeded) {
+                state.huf -= hufNeeded;
+                state.usd += state.tradeSize;
+                log(`Sold HUF for $100 USD`);
+            }
+        }
+        updateUI();
+    }
+
+    function log(msg, isShock = false) {
+        const logContainer = document.getElementById('event-log');
+        const entry = document.createElement('div');
+        entry.className = `log-entry ${isShock ? 'shock' : ''}`;
+        entry.innerText = `[Day ${state.day}] ${msg}`;
+        
+        logContainer.prepend(entry);
+
+        const entries = logContainer.getElementsByClassName('log-entry');
+        for (let i = 0; i < entries.length; i++) {
+            if (i === 1) entries[i].classList.add('old');
+            if (i >= 2) entries[i].classList.add('very-old');
+            if (i > 4) logContainer.removeChild(entries[i]);
+        }
+    }
+
+    function processTick() {
+        state.day++;
+        
+        let growthFactor = 1.004; // Base inflation (4% per tick)
+
+        // Check each event's probability if no shock is currently active
+        if (!state.activeShock) {
+            for (const event of RANDOM_EVENTS) {
+                if (Math.random() < event.probability) {
+                    state.activeShock = event;
+                    state.shockTimeRemaining = event.duration;
+                    log(`${event.type} event: ${event.descr}`, true);
+                    break; // Only one event can start at a time
+                }
+            }
+        }
+
+        // Apply Shock Impact
+        if (state.activeShock) {
+            const tickImpact = 1 + (state.activeShock.impact / state.activeShock.duration);
+            growthFactor *= tickImpact;
+            state.shockTimeRemaining--;
+
+            if (state.shockTimeRemaining <= 0) {
+                log(`The effects of ${state.activeShock.name} have settled.`);
+                state.activeShock = null;
+            }
+        }
+
+        // Market fluctuation
+        const jitter = (Math.random() - 0.5) * 2;
+        state.price = (state.price * growthFactor) + jitter;
+
+        // History Management
+        state.history.push(state.price);
+        state.labels.push('');
+        if(state.history.length > 25) {
+            state.history.shift();
+            state.labels.shift();
+        }
+
+        updateUI();
+    }
+
+    setInterval(processTick, 750);
+    updateUI();
+</script>
+
+</body>
+</html>
